@@ -296,6 +296,7 @@ Settings come from the environment, `scripts/local.sh` or `.env`; the defaults a
 | `MAX_TOKENS` | 32768 | a reply's budget when a request sets none |
 | `MIN_AVAIL_GIB`, `MIN_AVAIL_WAIT_S` | 112, 30 | `start.sh` refuses to start with less memory available than this on either Spark (`0` skips the check); it re-reads the memory for up to `MIN_AVAIL_WAIT_S` seconds first, because the page cache a build or a large copy just left counts as available only once it is written back (`0` reads once) |
 | `MEMGUARD_GIB`, `MEMGUARD_HOLD_S`, `MEMGUARD_HARD_GIB` | 2.5, 4, 1 | `scripts/memguard.sh` kills a rank's container when the memory available stays under the floor for `MEMGUARD_HOLD_S` seconds without coming back over it, or at once when it falls under the hard floor. A dip that recovers is logged and not killed (decimals fine; `MEMGUARD_GIB=0` turns the guard off) |
+| `DISPLAY_KV_MIB` | 0 | display reservation in MiB added to the KV cache pool on every rank without taking host memory beyond a few KiB of bookkeeping (`zig/patches/0007-dsv41-display-kv.patch`); a multiple of 16 from 0 to 2032. Headless Sparks only: `start.sh` refuses it while a display is connected to card0 or modeset is off |
 | `HEAD_ENGRAM_DIR` | empty | a local folder with Engram's two shards for rank 0 (as `WORKER_ENGRAM_DIR` is on the worker); empty reads them from `HF_CACHE` |
 | `HEAD_NFS_SERVER`, `HEAD_NFS_VOLUME` | empty | rank 0 reads the checkpoint over NFS through a docker volume the docker daemon mounts (no root, survives a reboot); empty uses `HF_CACHE` as a host path. sshfs does not work: it lists files as type "unknown", which the engine skips |
 | `TF_DS_ENGRAM_LANES`, `TF_DS_IDX_SPLIT` | unset | the engine patches' switches (`zig/patches/`, see Status); a `TF_DS_*` variable you export goes to both ranks |
@@ -339,6 +340,7 @@ answering and has to be power-cycled (this happened once, with the engine's rese
 - the KV cache is small (compressed FP4 with block scales; about 0.5 GiB at 262,144 tokens and ~1.8 GiB at the full window,
   by two memory readings); it is sized from `CONTEXT` when the model loads and shared by the streams. Most of the
   memory is the weights (~99 GiB, of which ~3.5 GiB are the drafter's), so the head's other software decides what is left.
+- `DISPLAY_KV_MIB` (`zig/patches/0007-dsv41-display-kv.patch`) reclaims up to 2032 MiB of the GB10 display reservation on headless Sparks for the KV cache pool without taking host memory beyond a few KiB of bookkeeping. Both ranks refuse to start if a monitor is connected or modeset is disabled on `/dev/dri/card0`.
 
 ## Repository layout
 

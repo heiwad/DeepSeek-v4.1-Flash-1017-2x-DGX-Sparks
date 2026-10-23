@@ -26,7 +26,8 @@
 #            WORKER_ENGRAM_DIR, WORKER_CACHE_DIR, STATE_DIR, LOG_DIR, LOG_KEEP
 #   engine   TF_REPO, TF_REF, INPUTS_REF, KIT_REPO, KIT_REF, ZIG_VERSION, BASE_IMAGE, IMAGE, CONTAINER_NAME
 #   setup    PREPARE (auto | 1 | 0), WAIT_TIMEOUT (seconds, default 2400), DRY_RUN=1
-#   memory   MIN_AVAIL_GIB (refuse to start below it), MIN_AVAIL_WAIT_S (re-read for this long first), MEMGUARD_GIB (kill a rank's container below it), HEAD_NFS_SERVER,
+#   memory   DISPLAY_KV_MIB (display reservation in the KV pool), MIN_AVAIL_GIB (refuse to start below it), MIN_AVAIL_WAIT_S (re-read for this long first),
+#            MEMGUARD_GIB (kill a rank's container below it), HEAD_NFS_SERVER,
 #            HEAD_NFS_VOLUME (rank 0 reads the checkpoint over NFS through a docker volume)
 #   ranks    every TENSORFOLD_* and TF_DS_* variable you set goes to both ranks
 #            every other exported NCCL_* variable too (values of A-Z a-z 0-9 _ . , : = / - only), RANK1_PROFILE=1|2: rank 1's --profile
@@ -57,8 +58,28 @@ for v in CONTEXT PARALLEL MAX_TOKENS TOP_K; do [[ "${!v}" =~ ^[1-9][0-9]*$ ]] ||
 [[ "$PREFILL_INTERLEAVE_MS" =~ ^[0-9]+$ ]] && (( PREFILL_INTERLEAVE_MS <= 5000 )) || die "PREFILL_INTERLEAVE_MS is 0 to 5000 milliseconds, not $PREFILL_INTERLEAVE_MS"
 for v in THINKING DRAFTS RDMA GRAPHS SIDE PREFETCH ENGRAM_AIO REPLAY_FLOOR API_KEY; do [[ "${!v}" =~ ^[01]$ ]] || die "$v is 0 or 1, not ${!v}"; done
 [[ "${RANK1_PROFILE:-}" =~ ^[012]?$ ]] || die "RANK1_PROFILE is empty, 0, 1 or 2, not '${RANK1_PROFILE:-}'"
+[[ "$DISPLAY_KV_MIB" =~ ^(0|[1-9][0-9]{0,3})$ ]] && (( DISPLAY_KV_MIB % 16 == 0 && DISPLAY_KV_MIB <= 2032 )) ||
+  die "DISPLAY_KV_MIB is a multiple of 16 from 0 to 2032, not $DISPLAY_KV_MIB"
 nccl_extra_collect
 check_workers
+if (( DISPLAY_KV_MIB )); then        # headless only: a monitor's framebuffer lives in the reservation
+  [[ -e /dev/dri/card0 ]] || die "DISPLAY_KV_MIB needs /dev/dri/card0, which this Spark lacks"
+  # no outputs under card0 at all: nvidia_drm runs without modeset, which has no dumb buffers for the span
+  compgen -G '/sys/class/drm/card0-*/status' >/dev/null ||
+    die "DISPLAY_KV_MIB needs nvidia_drm with modeset=1, and card0 shows no display outputs (an /etc/modprobe.d file may set modeset=0); set it to 0"
+  for _s in /sys/class/drm/card0-*/status; do
+    [[ -r "$_s" ]] || die "DISPLAY_KV_MIB needs readable display status, and card0 shows an unreadable status file; set it to 0"
+  done
+  _shown=$(grep -lx connected /sys/class/drm/card0-*/status 2>/dev/null | sed 's|.*/\(card0-[^/]*\)/status|\1|' | paste -sd, - || true)
+  [[ -z "$_shown" ]] || die "DISPLAY_KV_MIB is for headless Sparks, and $_shown has a display connected; set it to 0"
+  worker 1 'test -e /dev/dri/card0' || die "DISPLAY_KV_MIB needs /dev/dri/card0, which $(worker_host 1) lacks"
+  worker 1 "compgen -G '/sys/class/drm/card0-*/status' >/dev/null" ||
+    die "DISPLAY_KV_MIB needs nvidia_drm with modeset=1, and card0 on $(worker_host 1) shows no display outputs (an /etc/modprobe.d file may set modeset=0); set it to 0"
+  worker 1 'for s in /sys/class/drm/card0-*/status; do test -r "$s" || exit 1; done' ||
+    die "DISPLAY_KV_MIB needs readable display status, and card0 on $(worker_host 1) shows an unreadable status file; set it to 0"
+  _wshown=$(worker 1 'grep -lx connected /sys/class/drm/card0-*/status 2>/dev/null | sed "s|.*/\(card0-[^/]*\)/status|\1|" | paste -sd, - || true')
+  [[ -z "$_wshown" ]] || die "DISPLAY_KV_MIB is for headless Sparks, and $_wshown on $(worker_host 1) has a display connected; set it to 0"
+fi
 
 # rank 0's command (its serve flags need no link): built first, so the flags can be checked before anything is stopped
 SERVE=(tensorfold-native serve "$(served_in_container)" --backend cuda --host "$HOST" --port "$PORT" --name "$SERVED_NAME"
@@ -203,6 +224,7 @@ ENGINE_ENV=("TF_DS_REPLAY_FLOOR=$REPLAY_FLOOR" "TF_DS_STREAMS=$PARALLEL" "HF_HUB
 while IFS='=' read -r name _; do ENGINE_ENV+=("$name=${!name}"); done < <(env | grep -E '^(TENSORFOLD|TF_DS)_[A-Z0-9_]+=' | grep -vE '^TF_DS_(REPLAY_FLOOR|STREAMS|ROUND_ROWS|GRAPHS|HC_SIDE|L2_PREFETCH|ENGRAM_AIO|RANK_CACHE|KIT|ENGRAM|TOKEN_MAP)=' || true)
 envs() { local x; for x in "$@"; do printf -- '-e %q ' "$x"; done; }
 RUN_ARGS="--label tf.recipe.ablit=$(ablit_identity) --gpus all --ipc=host --network host --ulimit memlock=-1 --ulimit stack=67108864 --cap-add IPC_LOCK --device /dev/infiniband"
+(( DISPLAY_KV_MIB == 0 )) || RUN_ARGS+=" --device /dev/dri/card0"
 DATA=/hf/$DATA_SUB
 KIT=/hf/$KIT_SUB/kit
 # rank 1 takes the round's settings as flags only (tf-dsv41-lanes reads no TF_DS_GRAPHS & co.): without them it runs

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `DISPLAY_KV_MIB`: wire the kit to the engine's display reservation plumbing (`TF_DS_DISPLAY_KV_MIB`, `zig/patches/0007-dsv41-display-kv.patch`) with headless and modeset preflight checks on head and worker.
+
 - `prepare.sh`'s "cannot mount ... over NFS" error shows the last four lines of docker's output, not only the last (which was always
   docker's "Run 'docker run --help'" line, never the reason); the README's NFS section says what to check (issue
   [#15](https://github.com/MiaAI-Lab/DeepSeek-v4.1-Flash-1017-2x-DGX-Sparks/issues/15), reported by **aoeu10**). The README's memory note now

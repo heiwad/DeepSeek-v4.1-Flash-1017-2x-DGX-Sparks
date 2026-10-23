@@ -190,6 +190,13 @@ MIN_AVAIL_WAIT_S="${MIN_AVAIL_WAIT_S:-30}"
 MEMGUARD_GIB="${MEMGUARD_GIB:-2.5}"
 MEMGUARD_HOLD_S="${MEMGUARD_HOLD_S:-4}"
 MEMGUARD_HARD_GIB="${MEMGUARD_HARD_GIB:-1}"
+# The display reservation in the KV cache pool (zig/patches/0007-dsv41-display-kv.patch): the GB10 firmware keeps ~2 GiB
+# for a screen that a headless Spark never uses and MemAvailable never counts. DISPLAY_KV_MIB of it (a multiple of 16,
+# at most 2032) joins the KV pool on every rank without taking host memory beyond a few KiB of bookkeeping. Headless
+# Sparks only: start.sh refuses it while a display is connected to card0 or modeset is off. Needs /dev/dri/card0 in the
+# containers (nvidia_drm with modeset=1; start.sh passes --device /dev/dri/card0). 0 (default): off.
+DISPLAY_KV_MIB="${DISPLAY_KV_MIB:-0}"
+export TF_DS_DISPLAY_KV_MIB="$DISPLAY_KV_MIB"
 
 # Colours only on a terminal.
 _c() { [[ -t "$1" ]] && printf '\033[%sm' "$2" || true; }
